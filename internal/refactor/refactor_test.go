@@ -156,6 +156,249 @@ func caller() {
 	}
 }
 
+func TestAddParameterInMiddle_CallSiteCorrect(t *testing.T) {
+	// This test mimics the exact bug scenario:
+	// - ResolveForDelivery(ctx, products, hfWeek, marketCode)
+	// - Insert isTest at index 2
+	// - Expected: ResolveForDelivery(ctx, products, false, hfWeek, marketCode)
+	testDir := setupTestDir(t, map[string]string{
+		"resolver.go": `package main
+
+import "context"
+
+type Resolver struct{}
+
+func (r *Resolver) ResolveForDelivery(
+	ctx context.Context,
+	products []string,
+	hfWeek string,
+	marketCode string,
+) error {
+	return nil
+}
+`,
+		"caller.go": `package main
+
+import "context"
+
+func DigestOrder() {
+	r := &Resolver{}
+	err := r.ResolveForDelivery(ctx, query.Order.Products, query.HFWeek, query.MarketCode)
+	_ = err
+}
+
+var ctx = context.Background()
+var query = struct {
+	Order struct{ Products []string }
+	HFWeek string
+	MarketCode string
+}{}
+`,
+	})
+
+	// Insert isTest bool at index 2
+	r := refactor.New()
+	spec := analyzer.RefactorSpec{
+		NewParams: []analyzer.Parameter{
+			{Name: "ctx", Type: "context.Context"},
+			{Name: "products", Type: "[]string"},
+			{Name: "isTest", Type: "bool"},       // NEW at index 2
+			{Name: "hfWeek", Type: "string"},     // Was index 2, now index 3
+			{Name: "marketCode", Type: "string"}, // Was index 3, now index 4
+		},
+		NewReturns: []analyzer.Parameter{
+			{Type: "error"},
+		},
+		DefaultValues: map[string]string{
+			"isTest": "false",
+		},
+	}
+
+	edits, err := r.Refactor(filepath.Join(testDir, "resolver.go"), 60, spec)
+	if err != nil {
+		t.Fatalf("Refactor failed: %v", err)
+	}
+
+	content := applyEdits(t, testDir, edits)
+
+	// Debug: print the result
+	t.Logf("caller.go content:\n%s", content["caller.go"])
+
+	// Verify call site is correct
+	expectedCall := `r.ResolveForDelivery(ctx, query.Order.Products, false, query.HFWeek, query.MarketCode)`
+	if !strings.Contains(content["caller.go"], expectedCall) {
+		t.Errorf("call site not updated correctly.\nExpected to contain: %s\nGot:\n%s", expectedCall, content["caller.go"])
+	}
+
+	// Verify signature is correct (parameters in single line after refactoring)
+	if !strings.Contains(content["resolver.go"], "ResolveForDelivery(ctx context.Context, products []string, isTest bool, hfWeek string, marketCode string)") {
+		t.Errorf("signature not updated correctly:\n%s", content["resolver.go"])
+	}
+}
+
+func TestAddParameterInMiddle_MultilineCallSite(t *testing.T) {
+	// Test with multiline call site arguments (like the real bug scenario)
+	testDir := setupTestDir(t, map[string]string{
+		"resolver.go": `package main
+
+import "context"
+
+type Resolver struct{}
+
+func (r *Resolver) ResolveForDelivery(
+	ctx context.Context,
+	products []string,
+	hfWeek string,
+	marketCode string,
+) error {
+	return nil
+}
+`,
+		"caller.go": `package main
+
+import "context"
+
+type service struct {
+	resolver *Resolver
+}
+
+func (s service) DigestOrder(ctx context.Context) error {
+	err := s.resolver.ResolveForDelivery(ctx, query.Order.Products, query.HFWeek, query.MarketCode)
+	return err
+}
+
+var query = struct {
+	Order struct{ Products []string }
+	HFWeek string
+	MarketCode string
+}{}
+`,
+	})
+
+	// Insert isTest bool at index 2
+	r := refactor.New()
+	spec := analyzer.RefactorSpec{
+		NewParams: []analyzer.Parameter{
+			{Name: "ctx", Type: "context.Context"},
+			{Name: "products", Type: "[]string"},
+			{Name: "isTest", Type: "bool"},       // NEW at index 2
+			{Name: "hfWeek", Type: "string"},     // Was index 2, now index 3
+			{Name: "marketCode", Type: "string"}, // Was index 3, now index 4
+		},
+		NewReturns: []analyzer.Parameter{
+			{Type: "error"},
+		},
+		DefaultValues: map[string]string{
+			"isTest": "false",
+		},
+	}
+
+	edits, err := r.Refactor(filepath.Join(testDir, "resolver.go"), 60, spec)
+	if err != nil {
+		t.Fatalf("Refactor failed: %v", err)
+	}
+
+	content := applyEdits(t, testDir, edits)
+
+	// Debug: print the result
+	t.Logf("caller.go content:\n%s", content["caller.go"])
+
+	// Verify call site is correct
+	expectedCall := `s.resolver.ResolveForDelivery(ctx, query.Order.Products, false, query.HFWeek, query.MarketCode)`
+	if !strings.Contains(content["caller.go"], expectedCall) {
+		t.Errorf("call site not updated correctly.\nExpected to contain: %s\nGot:\n%s", expectedCall, content["caller.go"])
+	}
+}
+
+func TestDeduplicateEdits_PreventsDuplicateCallSiteEdits(t *testing.T) {
+	// This test ensures that when the same call site appears in multiple packages
+	// (e.g., main package and test package due to Tests: true), we don't generate
+	// duplicate edits that would corrupt the file.
+	//
+	// The bug manifested as: "MarketCodeketCode" instead of "MarketCode"
+	// because the same edit was applied twice at the same offset.
+
+	testDir := setupTestDir(t, map[string]string{
+		"resolver.go": `package main
+
+import "context"
+
+type Resolver struct{}
+
+func (r *Resolver) Process(ctx context.Context, data string, code string) error {
+	return nil
+}
+`,
+		"caller.go": `package main
+
+import "context"
+
+func UseResolver() {
+	r := &Resolver{}
+	_ = r.Process(ctx, data, code)
+}
+
+var ctx = context.Background()
+var data = "test"
+var code = "US"
+`,
+		// Test file in same package - this causes Go to load caller.go in multiple packages
+		"caller_test.go": `package main
+
+import "testing"
+
+func TestUseResolver(t *testing.T) {
+	UseResolver()
+}
+`,
+	})
+
+	// Insert isTest bool at index 2
+	r := refactor.New()
+	spec := analyzer.RefactorSpec{
+		NewParams: []analyzer.Parameter{
+			{Name: "ctx", Type: "context.Context"},
+			{Name: "data", Type: "string"},
+			{Name: "isTest", Type: "bool"}, // NEW at index 2
+			{Name: "code", Type: "string"}, // Was index 2, now index 3
+		},
+		NewReturns: []analyzer.Parameter{
+			{Type: "error"},
+		},
+		DefaultValues: map[string]string{
+			"isTest": "false",
+		},
+	}
+
+	edits, err := r.Refactor(filepath.Join(testDir, "resolver.go"), 60, spec)
+	if err != nil {
+		t.Fatalf("Refactor failed: %v", err)
+	}
+
+	// Verify no duplicate edits for caller.go
+	callerEdits := edits.Changes[filepath.Join(testDir, "caller.go")]
+	if len(callerEdits) != 1 {
+		t.Errorf("expected exactly 1 edit for caller.go, got %d (duplicates not removed!)", len(callerEdits))
+		for i, edit := range callerEdits {
+			t.Logf("  Edit %d: [%d-%d]", i+1, edit.Range.Start.Offset, edit.Range.End.Offset)
+		}
+	}
+
+	// Apply edits and verify no corruption
+	content := applyEdits(t, testDir, edits)
+
+	// The key check: "code" should appear exactly once, not corrupted like "codecode"
+	expectedCall := `r.Process(ctx, data, false, code)`
+	if !strings.Contains(content["caller.go"], expectedCall) {
+		t.Errorf("call site corrupted or not updated correctly.\nExpected: %s\nGot:\n%s", expectedCall, content["caller.go"])
+	}
+
+	// Also verify no duplicate text patterns that would indicate corruption
+	if strings.Contains(content["caller.go"], "codecode") {
+		t.Error("detected corruption pattern 'codecode' - duplicate edits were applied!")
+	}
+}
+
 func TestAddParameterInMiddle_BodyUsagesPreserved(t *testing.T) {
 	// Given a function that uses its parameters in the body
 	testDir := setupTestDir(t, map[string]string{

@@ -238,12 +238,33 @@ func (r *Refactorer) refactorFunction(fd *ast.FuncDecl, pkg *packages.Package, f
 		edits.Changes[fname] = append(edits.Changes[fname], fileEdits...)
 	}
 
+	// Deduplicate edits (same file + same offset range)
+	for fname := range edits.Changes {
+		edits.Changes[fname] = deduplicateEdits(edits.Changes[fname])
+	}
+
 	// Sort edits by position (descending) within each file
 	for fname := range edits.Changes {
 		sortEditsByOffset(edits.Changes[fname])
 	}
 
 	return edits, nil
+}
+
+// deduplicateEdits removes duplicate edits with the same offset range
+func deduplicateEdits(edits []analyzer.TextEdit) []analyzer.TextEdit {
+	seen := make(map[string]bool)
+	var result []analyzer.TextEdit
+
+	for _, edit := range edits {
+		key := fmt.Sprintf("%d-%d", edit.Range.Start.Offset, edit.Range.End.Offset)
+		if !seen[key] {
+			seen[key] = true
+			result = append(result, edit)
+		}
+	}
+
+	return result
 }
 
 func (r *Refactorer) refactorInterfaceMethod(method *ast.Field, iface *ast.TypeSpec, pkg *packages.Package, spec analyzer.RefactorSpec) (*analyzer.WorkspaceEdit, error) {
@@ -270,6 +291,11 @@ func (r *Refactorer) refactorInterfaceMethod(method *ast.Field, iface *ast.TypeS
 	callEdits := r.findAndEditInterfaceCallSites(iface.Name.Name, method.Names[0].Name, pkg, paramMapping, spec)
 	for fname, fileEdits := range callEdits {
 		edits.Changes[fname] = append(edits.Changes[fname], fileEdits...)
+	}
+
+	// Deduplicate edits (same file + same offset range)
+	for fname := range edits.Changes {
+		edits.Changes[fname] = deduplicateEdits(edits.Changes[fname])
 	}
 
 	// Sort edits

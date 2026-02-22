@@ -388,10 +388,7 @@ function M.apply_changes()
       local edits_applied = 0
       local files_modified = 0
 
-      -- Debug: show what we received
-      for filename, file_edits in pairs(result.changes or {}) do
-        vim.notify(string.format("File: %s has %d edits", filename, #file_edits), vim.log.levels.DEBUG)
-      end
+
 
       for filename, file_edits in pairs(result.changes or {}) do
         -- Sort edits by offset descending
@@ -409,11 +406,13 @@ function M.apply_changes()
           for _, edit in ipairs(file_edits) do
             local start_offset = edit.range.start.offset
             local end_offset = edit.range["end"].offset
-            -- Lua sub: sub(1, N) gets first N chars, sub(N) gets from char N onwards
-            -- To replace bytes [start, end) with newText:
-            -- Keep bytes [0, start) = sub(1, start)
-            -- Replace bytes [start, end)
-            -- Keep bytes [end, ...) = sub(end + 1)
+
+            -- Go offset N means Nth byte (0-indexed)
+            -- Lua string position N means Nth character (1-indexed)
+            -- To replace Go bytes [start, end):
+            --   Keep Lua chars 1 to start (bytes 0 to start-1)
+            --   Insert new text
+            --   Keep Lua chars from end+1 onwards (bytes end onwards)
             content = content:sub(1, start_offset) .. edit.newText .. content:sub(end_offset + 1)
             edits_applied = edits_applied + 1
           end
