@@ -15,9 +15,16 @@ A Neovim plugin providing IntelliJ-like **"Change Signature"** refactoring for G
 ## Requirements
 
 - Neovim 0.9+
-- Go 1.21+
+- macOS (Intel or Apple Silicon) or Linux (x64 or ARM64)
+- Go 1.21+ (optional - only needed if pre-built binaries aren't available)
 
 ## Installation
+
+The plugin automatically downloads or builds the required CLI binary on first use:
+
+1. **If a pre-built binary is available** for your platform, it downloads automatically
+2. **If Go is installed**, it builds the binary locally
+3. **Otherwise**, it shows an error with instructions
 
 ### Using lazy.nvim
 
@@ -25,7 +32,6 @@ A Neovim plugin providing IntelliJ-like **"Change Signature"** refactoring for G
 {
   "abhipranay/nvim-go-sigrefactor",
   ft = "go",
-  build = "make build",
   config = function()
     require("go-sigrefactor").setup({
       keymaps = {
@@ -42,7 +48,6 @@ A Neovim plugin providing IntelliJ-like **"Change Signature"** refactoring for G
 use {
   "abhipranay/nvim-go-sigrefactor",
   ft = "go",
-  run = "make build",
   config = function()
     require("go-sigrefactor").setup()
   end,
@@ -111,6 +116,7 @@ require("go-sigrefactor").setup({
 |---------|-------------|
 | `:GoChangeSignature` | Open signature editor at cursor |
 | `:GoChangeSignatureClose` | Close signature editor (if stuck) |
+| `:GoSigRefactorInstall` | Manually install/update the CLI binary |
 
 ## How It Works
 
@@ -122,6 +128,24 @@ The plugin consists of two components:
 The CLI tool uses `golang.org/x/tools/go/packages` to load type-checked packages, ensuring accurate refactoring across your entire codebase.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed technical documentation.
+
+## Troubleshooting
+
+### "gosigrefactor binary not found"
+
+Run `:GoSigRefactorInstall` to download or build the binary. If that fails:
+
+1. **Check your platform**: Only macOS and Linux are supported
+2. **Install Go**: If no pre-built binary is available, install Go from https://go.dev/dl/
+3. **Manual build**: `cd ~/.local/share/nvim/lazy/nvim-go-sigrefactor && make build`
+
+### "no function found at offset"
+
+Place your cursor directly on the function name, not inside the function body or on parameters.
+
+### Changes not applied to all files
+
+Ensure all files are saved before refactoring. The tool reads from disk, not from Neovim buffers.
 
 ## Contributing
 

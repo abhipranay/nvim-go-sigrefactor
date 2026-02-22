@@ -1,5 +1,6 @@
 local config = require("go-sigrefactor.config")
 local ui = require("go-sigrefactor.ui")
+local binary = require("go-sigrefactor.binary")
 
 local M = {}
 
@@ -54,6 +55,21 @@ function M.setup(opts)
     M.close()
   end, {
     desc = "Close signature editor window",
+  })
+
+  -- Create install command for manual binary installation
+  vim.api.nvim_create_user_command("GoSigRefactorInstall", function()
+    binary.ensure_binary(function(path, err)
+      if path then
+        config.options.binary = path
+        config.binary_ready = true
+        vim.notify("gosigrefactor installed: " .. path, vim.log.levels.INFO)
+      else
+        vim.notify("Installation failed: " .. (err or "unknown error"), vim.log.levels.ERROR)
+      end
+    end)
+  end, {
+    desc = "Install/update gosigrefactor binary",
   })
 
   -- Setup keymaps if enabled

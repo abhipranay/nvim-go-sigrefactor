@@ -4,9 +4,9 @@ local M = {}
 
 -- Execute CLI command and return parsed JSON
 function M.execute(cmd, args, callback)
-  local binary = config.options.binary
+  local binary = config.get_binary()
   if not binary then
-    callback(nil, "gosigrefactor binary not found")
+    callback(nil, "gosigrefactor binary not found. Please run :GoSigRefactorInstall or ensure Go is installed.")
     return
   end
 

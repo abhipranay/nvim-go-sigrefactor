@@ -2,7 +2,7 @@ local M = {}
 
 M.defaults = {
   -- Path to gosigrefactor binary
-  binary = nil, -- Will be auto-detected
+  binary = nil, -- Will be auto-detected/downloaded
 
   -- Keymaps
   keymaps = {
@@ -18,28 +18,37 @@ M.defaults = {
 }
 
 M.options = {}
+M.binary_ready = false
 
 function M.setup(opts)
   M.options = vim.tbl_deep_extend("force", M.defaults, opts or {})
 
-  -- Auto-detect binary path
-  if not M.options.binary then
-    local plugin_dir = vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":h:h:h")
-    local binary_path = plugin_dir .. "/bin/gosigrefactor"
-    if vim.fn.filereadable(binary_path) == 1 then
-      M.options.binary = binary_path
-    else
-      -- Try to find in PATH
-      local handle = io.popen("which gosigrefactor 2>/dev/null")
-      if handle then
-        local result = handle:read("*a"):gsub("%s+$", "")
-        handle:close()
-        if result ~= "" then
-          M.options.binary = result
-        end
-      end
-    end
+  -- If binary explicitly provided, use it
+  if M.options.binary and vim.fn.executable(M.options.binary) == 1 then
+    M.binary_ready = true
+    return
   end
+
+  -- Otherwise, ensure binary is available (build or download)
+  local binary = require("go-sigrefactor.binary")
+  binary.ensure_binary(function(path, err)
+    if path then
+      M.options.binary = path
+      M.binary_ready = true
+    else
+      vim.notify("go-sigrefactor: " .. (err or "Failed to get binary"), vim.log.levels.ERROR)
+    end
+  end)
+end
+
+-- Get binary path, ensuring it's ready
+function M.get_binary()
+  if M.options.binary and vim.fn.executable(M.options.binary) == 1 then
+    return M.options.binary
+  end
+
+  local binary = require("go-sigrefactor.binary")
+  return binary.get_binary_path()
 end
 
 return M
