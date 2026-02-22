@@ -645,6 +645,25 @@ func (r *Refactorer) findAndEditCallSites(fd *ast.FuncDecl, pkg *packages.Packag
 func (r *Refactorer) findAndEditInterfaceCallSites(ifaceName, methodName string, pkg *packages.Package, paramMapping map[int]int, spec analyzer.RefactorSpec) map[string][]analyzer.TextEdit {
 	edits := make(map[string][]analyzer.TextEdit)
 
+	// First, find the interface type to check implementations
+	var ifaceType *types.Interface
+	for _, searchPkg := range r.pkgs {
+		obj := searchPkg.Types.Scope().Lookup(ifaceName)
+		if obj == nil {
+			continue
+		}
+		named, ok := obj.Type().(*types.Named)
+		if !ok {
+			continue
+		}
+		iface, ok := named.Underlying().(*types.Interface)
+		if !ok {
+			continue
+		}
+		ifaceType = iface
+		break
+	}
+
 	for _, searchPkg := range r.pkgs {
 		for _, file := range searchPkg.Syntax {
 			ast.Inspect(file, func(n ast.Node) bool {
@@ -662,14 +681,42 @@ func (r *Refactorer) findAndEditInterfaceCallSites(ifaceName, methodName string,
 					return true
 				}
 
-				// Check if receiver type is the interface
+				// Check if receiver type is the interface or implements it
 				tv, ok := searchPkg.TypesInfo.Types[sel.X]
 				if !ok {
 					return true
 				}
 
-				typeStr := tv.Type.String()
-				if !strings.Contains(typeStr, ifaceName) {
+				receiverType := tv.Type
+				isMatch := false
+
+				// Check 1: receiver type string contains interface name (direct interface use)
+				typeStr := receiverType.String()
+				if strings.Contains(typeStr, ifaceName) {
+					isMatch = true
+				}
+
+				// Check 2: receiver type implements the interface (concrete type use)
+				if !isMatch && ifaceType != nil {
+					// Get underlying type for pointer types
+					checkType := receiverType
+					if ptr, ok := checkType.(*types.Pointer); ok {
+						checkType = ptr.Elem()
+					}
+
+					// Check if this type implements the interface
+					if types.Implements(receiverType, ifaceType) {
+						isMatch = true
+					} else if types.Implements(types.NewPointer(checkType), ifaceType) {
+						isMatch = true
+					} else if named, ok := checkType.(*types.Named); ok {
+						if types.Implements(named, ifaceType) || types.Implements(types.NewPointer(named), ifaceType) {
+							isMatch = true
+						}
+					}
+				}
+
+				if !isMatch {
 					return true
 				}
 

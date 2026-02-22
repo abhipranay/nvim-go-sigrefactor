@@ -514,6 +514,81 @@ func caller() {
 	}
 }
 
+func TestInterfaceRefactoring_AddTwoParameters_AllCallSites(t *testing.T) {
+	// Given an interface with implementations and call sites on BOTH interface and concrete types
+	testDir := setupTestDir(t, map[string]string{
+		"service.go": `package main
+
+type OrderService interface {
+	CreateOrder(ctx context.Context, customerID string) (string, error)
+}
+
+type InMemoryService struct{}
+
+func (s *InMemoryService) CreateOrder(ctx context.Context, customerID string) (string, error) {
+	return "order-1", nil
+}
+
+func UseViaInterface(svc OrderService) {
+	_, _ = svc.CreateOrder(context.Background(), "cust-1")
+}
+
+func UseViaConcrete() {
+	svc := &InMemoryService{}
+	_, _ = svc.CreateOrder(context.Background(), "cust-2")
+}
+`,
+	})
+
+	// When adding TWO parameters to interface method
+	r := refactor.New()
+	spec := analyzer.RefactorSpec{
+		NewParams: []analyzer.Parameter{
+			{Name: "ctx", Type: "context.Context"},
+			{Name: "customerID", Type: "string"},
+			{Name: "isTest", Type: "bool"},
+			{Name: "priority", Type: "int"},
+		},
+		NewReturns: []analyzer.Parameter{
+			{Type: "string"},
+			{Type: "error"},
+		},
+		DefaultValues: map[string]string{
+			"isTest":   "false",
+			"priority": "0",
+		},
+	}
+
+	edits, err := r.Refactor(filepath.Join(testDir, "service.go"), 60, spec)
+
+	// Then interface, implementation, and ALL call sites should update
+	if err != nil {
+		t.Fatalf("Refactor failed: %v", err)
+	}
+
+	content := applyEdits(t, testDir, edits)
+
+	// Interface should be updated
+	if !strings.Contains(content["service.go"], "CreateOrder(ctx context.Context, customerID string, isTest bool, priority int)") {
+		t.Errorf("interface not updated:\n%s", content["service.go"])
+	}
+
+	// Implementation should be updated
+	if !strings.Contains(content["service.go"], "func (s *InMemoryService) CreateOrder(ctx context.Context, customerID string, isTest bool, priority int)") {
+		t.Errorf("implementation not updated:\n%s", content["service.go"])
+	}
+
+	// Call site via interface should have default values
+	if !strings.Contains(content["service.go"], `svc.CreateOrder(context.Background(), "cust-1", false, 0)`) {
+		t.Errorf("call site via interface not updated:\n%s", content["service.go"])
+	}
+
+	// Call site via concrete type should ALSO have default values
+	if !strings.Contains(content["service.go"], `svc.CreateOrder(context.Background(), "cust-2", false, 0)`) {
+		t.Errorf("call site via concrete type not updated:\n%s", content["service.go"])
+	}
+}
+
 func TestInterfaceRefactoring(t *testing.T) {
 	// Given an interface with implementations
 	testDir := setupTestDir(t, map[string]string{
