@@ -201,3 +201,102 @@ func TestFindImplementations_InterfaceMethod(t *testing.T) {
 		t.Error("expected DBOrderService implementation")
 	}
 }
+
+func TestAnalyzeSignature_FromCallSite(t *testing.T) {
+	// Given a function call site (not the definition)
+	testFile := filepath.Join("..", "..", "testdata", "simple", "main.go")
+	absPath, err := filepath.Abs(testFile)
+	if err != nil {
+		t.Fatalf("failed to get absolute path: %v", err)
+	}
+
+	// When analyzing at a call site (line 11: "_ = ProcessOrder(...)")
+	// Offset 196 (0xc4) points to "ProcessOrder" in the function call
+	a := analyzer.New()
+	result, err := a.Analyze(absPath, 200) // Somewhere within "ProcessOrder" call
+
+	// Then we should still get the function signature (resolved from call site)
+	if err != nil {
+		t.Fatalf("Analyze failed: %v", err)
+	}
+
+	sig := result.Signature
+	if sig.Name != "ProcessOrder" {
+		t.Errorf("expected name ProcessOrder, got %s", sig.Name)
+	}
+
+	// Verify parameters are correct
+	if len(sig.Params) != 3 {
+		t.Fatalf("expected 3 params, got %d", len(sig.Params))
+	}
+
+	expectedParams := []struct {
+		name string
+		typ  string
+	}{
+		{"ctx", "context.Context"},
+		{"orderID", "string"},
+		{"amount", "int"},
+	}
+
+	for i, exp := range expectedParams {
+		if sig.Params[i].Name != exp.name {
+			t.Errorf("param %d: expected name %s, got %s", i, exp.name, sig.Params[i].Name)
+		}
+		if sig.Params[i].Type != exp.typ {
+			t.Errorf("param %d: expected type %s, got %s", i, exp.typ, sig.Params[i].Type)
+		}
+	}
+
+	// Verify usages are found (should find both call sites)
+	if len(result.Usages) < 2 {
+		t.Errorf("expected at least 2 usages, got %d", len(result.Usages))
+	}
+}
+
+func TestAnalyzeSignature_FromMethodCallSite(t *testing.T) {
+	// Given a method call site (svc.CreateOrder(...))
+	testFile := filepath.Join("..", "..", "testdata", "interface", "service.go")
+	absPath, err := filepath.Abs(testFile)
+	if err != nil {
+		t.Fatalf("failed to get absolute path: %v", err)
+	}
+
+	// When analyzing at a method call site (line 48: "svc.CreateOrder(...)")
+	// Offset 0x52e = 1326 is start of "CreateOrder" in the method call
+	a := analyzer.New()
+	result, err := a.Analyze(absPath, 1328)
+
+	// Then we should get the method signature (resolved from call site)
+	if err != nil {
+		t.Fatalf("Analyze failed: %v", err)
+	}
+
+	sig := result.Signature
+	if sig.Name != "CreateOrder" {
+		t.Errorf("expected name CreateOrder, got %s", sig.Name)
+	}
+
+	// Verify parameters are correct
+	if len(sig.Params) != 3 {
+		t.Fatalf("expected 3 params, got %d", len(sig.Params))
+	}
+
+	expectedParams := []struct {
+		name string
+		typ  string
+	}{
+		{"ctx", "context.Context"},
+		{"customerID", "string"},
+		{"items", "[]string"},
+	}
+
+	for i, exp := range expectedParams {
+		if sig.Params[i].Name != exp.name {
+			t.Errorf("param %d: expected name %s, got %s", i, exp.name, sig.Params[i].Name)
+		}
+		if sig.Params[i].Type != exp.typ {
+			t.Errorf("param %d: expected type %s, got %s", i, exp.typ, sig.Params[i].Type)
+		}
+	}
+}

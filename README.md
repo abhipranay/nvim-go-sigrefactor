@@ -70,10 +70,18 @@ require("go-sigrefactor").setup()
 
 ## Usage
 
-1. Place cursor on a function or method name
+1. Place cursor on a function/method name (either at definition or any call site)
 2. Run `:GoChangeSignature` or press `<leader>cs`
 3. Use the interactive UI to modify the signature
 4. Press `Enter` to apply or `q`/`Esc` to cancel
+
+The plugin works from:
+- **Function definitions** - `func ProcessOrder(...)`
+- **Function calls** - `ProcessOrder(ctx, "123", 100)`
+- **Method definitions** - `func (s *Service) Process(...)`
+- **Method calls** - `svc.Process(ctx, data)`
+- **Interface method definitions** - inside `type Service interface { ... }`
+- **Interface method calls** - calls on interface-typed variables
 
 ### UI Keybindings
 
@@ -141,7 +149,7 @@ Run `:GoSigRefactorInstall` to download or build the binary. If that fails:
 
 ### "no function found at offset"
 
-Place your cursor directly on the function name, not inside the function body or on parameters.
+Place your cursor directly on the function name - either at the definition or at a call site. The cursor must be on the function/method name itself, not inside the function body, on parameters, or on arguments.
 
 ### Changes not applied to all files
 

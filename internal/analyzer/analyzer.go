@@ -37,6 +37,25 @@ func (a *Analyzer) Analyze(filename string, offset int) (*AnalysisResult, error)
 		return nil, fmt.Errorf("failed to load packages: %w", err)
 	}
 
+	// First, try to find a call site and resolve it to the function definition
+	// This allows triggering signature change from function calls
+	resolved := a.findCallAtOffset(absPath, offset)
+	if resolved != nil {
+		// Check if it's an interface method call
+		if resolved.interfaceMethod != nil {
+			return a.analyzeInterfaceMethod(resolved.interfaceMethod, resolved.interfaceType, resolved.pkg, absPath)
+		}
+		// It's a concrete function call
+		if resolved.funcDecl != nil {
+			sig := a.extractSignature(resolved.funcDecl, resolved.pkg, absPath)
+			usages := a.findUsages(resolved.funcDecl, resolved.pkg, resolved.file)
+			return &AnalysisResult{
+				Signature: sig,
+				Usages:    usages,
+			}, nil
+		}
+	}
+
 	// Find the function/method at offset
 	funcDecl, pkg, file := a.findFuncAtOffset(absPath, offset)
 	if funcDecl == nil {
@@ -231,6 +250,182 @@ func (a *Analyzer) findInterfaceMethodAtOffset(filename string, offset int) (*as
 			}
 		}
 	}
+	return nil, nil, nil
+}
+
+// callResolution holds the result of resolving a call expression
+type callResolution struct {
+	funcDecl        *ast.FuncDecl
+	interfaceMethod *ast.Field
+	interfaceType   *ast.TypeSpec
+	pkg             *packages.Package
+	file            *ast.File
+}
+
+// findCallAtOffset finds a call expression at the given offset and resolves it
+// to the function definition. This allows triggering signature change from call sites.
+func (a *Analyzer) findCallAtOffset(filename string, offset int) *callResolution {
+	for _, pkg := range a.pkgs {
+		for _, file := range pkg.Syntax {
+			pos := pkg.Fset.Position(file.Pos())
+			if pos.Filename != filename {
+				continue
+			}
+
+			// Find call expression at offset
+			var calledIdent *ast.Ident
+
+			ast.Inspect(file, func(n ast.Node) bool {
+				call, ok := n.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+
+				// Check if cursor is on the function name part of the call
+				var funStart, funEnd int
+				switch fun := call.Fun.(type) {
+				case *ast.Ident:
+					// Direct function call: foo()
+					funStart = pkg.Fset.Position(fun.Pos()).Offset
+					funEnd = pkg.Fset.Position(fun.End()).Offset
+					if offset >= funStart && offset <= funEnd {
+						calledIdent = fun
+						return false
+					}
+				case *ast.SelectorExpr:
+					// Method call: obj.Method() or pkg.Function()
+					funStart = pkg.Fset.Position(fun.Sel.Pos()).Offset
+					funEnd = pkg.Fset.Position(fun.Sel.End()).Offset
+					if offset >= funStart && offset <= funEnd {
+						calledIdent = fun.Sel
+						return false
+					}
+				}
+
+				return true
+			})
+
+			if calledIdent == nil {
+				continue
+			}
+
+			// Resolve the called function using TypesInfo
+			obj := pkg.TypesInfo.Uses[calledIdent]
+			if obj == nil {
+				continue
+			}
+
+			// Must be a function
+			funcObj, ok := obj.(*types.Func)
+			if !ok {
+				continue
+			}
+
+			// Check if this is an interface method call
+			sig := funcObj.Type().(*types.Signature)
+			recv := sig.Recv()
+			if recv != nil {
+				// Check if receiver is an interface type
+				recvType := recv.Type()
+				if ptr, ok := recvType.(*types.Pointer); ok {
+					recvType = ptr.Elem()
+				}
+				if named, ok := recvType.(*types.Named); ok {
+					if _, isIface := named.Underlying().(*types.Interface); isIface {
+						// This is an interface method call - find the interface definition
+						ifaceName := named.Obj().Name()
+						methodName := funcObj.Name()
+						field, iface, ifacePkg := a.findInterfaceMethodByName(ifaceName, methodName)
+						if field != nil {
+							return &callResolution{
+								interfaceMethod: field,
+								interfaceType:   iface,
+								pkg:             ifacePkg,
+							}
+						}
+					}
+				}
+			}
+
+			// Find the concrete function declaration
+			fd, fdPkg, fdFile := a.findFuncDeclForObj(funcObj)
+			if fd != nil {
+				return &callResolution{
+					funcDecl: fd,
+					pkg:      fdPkg,
+					file:     fdFile,
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// findInterfaceMethodByName finds an interface method by interface and method name
+func (a *Analyzer) findInterfaceMethodByName(interfaceName, methodName string) (*ast.Field, *ast.TypeSpec, *packages.Package) {
+	for _, pkg := range a.pkgs {
+		for _, file := range pkg.Syntax {
+			for _, decl := range file.Decls {
+				genDecl, ok := decl.(*ast.GenDecl)
+				if !ok {
+					continue
+				}
+				for _, spec := range genDecl.Specs {
+					ts, ok := spec.(*ast.TypeSpec)
+					if !ok || ts.Name.Name != interfaceName {
+						continue
+					}
+					iface, ok := ts.Type.(*ast.InterfaceType)
+					if !ok {
+						continue
+					}
+					for _, method := range iface.Methods.List {
+						if _, ok := method.Type.(*ast.FuncType); !ok {
+							continue
+						}
+						if len(method.Names) > 0 && method.Names[0].Name == methodName {
+							return method, ts, pkg
+						}
+					}
+				}
+			}
+		}
+	}
+	return nil, nil, nil
+}
+
+// findFuncDeclForObj finds the AST FuncDecl for a types.Func object
+func (a *Analyzer) findFuncDeclForObj(funcObj *types.Func) (*ast.FuncDecl, *packages.Package, *ast.File) {
+	funcPos := funcObj.Pos()
+	if !funcPos.IsValid() {
+		return nil, nil, nil
+	}
+
+	// Find the package and file containing this function
+	for _, pkg := range a.pkgs {
+		pos := pkg.Fset.Position(funcPos)
+
+		for _, file := range pkg.Syntax {
+			filePos := pkg.Fset.Position(file.Pos())
+			if filePos.Filename != pos.Filename {
+				continue
+			}
+
+			// Find the FuncDecl at this position
+			for _, decl := range file.Decls {
+				fd, ok := decl.(*ast.FuncDecl)
+				if !ok {
+					continue
+				}
+
+				fdPos := pkg.Fset.Position(fd.Name.Pos())
+				if fdPos.Offset == pos.Offset {
+					return fd, pkg, file
+				}
+			}
+		}
+	}
+
 	return nil, nil, nil
 }
 

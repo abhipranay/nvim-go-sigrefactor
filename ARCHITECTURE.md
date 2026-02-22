@@ -78,16 +78,12 @@ pkgs, err := packages.Load(cfg, "./...")
 
 ### 2. Function Discovery
 
-Finding the function at a cursor position:
+Finding the function at a cursor position works from both definitions and call sites:
 
+**From Function Definition:**
 ```go
 func findFuncAtOffset(pkg *packages.Package, filename string, offset int) *ast.FuncDecl {
     for _, file := range pkg.Syntax {
-        if pkg.Fset.Position(file.Pos()).Filename != filename {
-            continue
-        }
-
-        var result *ast.FuncDecl
         ast.Inspect(file, func(n ast.Node) bool {
             if fd, ok := n.(*ast.FuncDecl); ok {
                 start := pkg.Fset.Position(fd.Pos()).Offset
@@ -99,13 +95,53 @@ func findFuncAtOffset(pkg *packages.Package, filename string, offset int) *ast.F
             }
             return true
         })
-        return result
     }
     return nil
 }
 ```
 
-**Algorithm**: Linear scan through AST nodes, checking if the byte offset falls within the node's range.
+**From Call Site (Call Site Resolution):**
+```go
+func findCallAtOffset(filename string, offset int) *callResolution {
+    // Find CallExpr at offset
+    ast.Inspect(file, func(n ast.Node) bool {
+        call, ok := n.(*ast.CallExpr)
+        if !ok { return true }
+
+        switch fun := call.Fun.(type) {
+        case *ast.Ident:
+            // Direct call: ProcessOrder(...)
+            if offset within fun range {
+                calledIdent = fun
+            }
+        case *ast.SelectorExpr:
+            // Method call: svc.Process(...)
+            if offset within fun.Sel range {
+                calledIdent = fun.Sel
+            }
+        }
+        return true
+    })
+
+    // Resolve to function definition using TypesInfo
+    funcObj := pkg.TypesInfo.Uses[calledIdent].(*types.Func)
+
+    // Check if it's an interface method call
+    if isInterfaceMethod(funcObj) {
+        return resolveInterfaceMethod(funcObj)
+    }
+
+    // Find concrete function declaration
+    return findFuncDeclForObj(funcObj)
+}
+```
+
+**Resolution Priority:**
+1. First, check if cursor is on a call site → resolve to definition
+2. Then, check if cursor is on a function definition
+3. Finally, check if cursor is on an interface method definition
+
+**Algorithm**: Linear scan through AST nodes, checking if the byte offset falls within the node's range. For call sites, use `TypesInfo.Uses` to resolve the called function to its definition.
 
 ### 3. Usage Finding
 
@@ -399,6 +435,7 @@ Tests cover:
 
 ## Future Improvements
 
+- [x] Trigger refactoring from call sites (not just definitions)
 - [ ] Change return types with automatic error handling updates
 - [ ] Support for method expressions
 - [ ] Integration with gopls for better accuracy
