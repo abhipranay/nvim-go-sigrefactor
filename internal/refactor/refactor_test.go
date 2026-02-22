@@ -156,6 +156,75 @@ func caller() {
 	}
 }
 
+func TestAddParameterInMiddle_BodyUsagesPreserved(t *testing.T) {
+	// Given a function that uses its parameters in the body
+	testDir := setupTestDir(t, map[string]string{
+		"main.go": `package main
+
+import "fmt"
+
+func ResolveData(ctx context.Context, products []string, hfWeek string, marketCode string) error {
+	fmt.Println(hfWeek)
+	fmt.Println(marketCode)
+	return nil
+}
+
+func caller() {
+	_ = ResolveData(context.Background(), []string{"a"}, "2024-W01", "US")
+}
+`,
+	})
+
+	// When adding a new parameter (isTest) at the hfWeek position
+	// This shifts hfWeek and marketCode to new positions
+	r := refactor.New()
+	spec := analyzer.RefactorSpec{
+		NewParams: []analyzer.Parameter{
+			{Name: "ctx", Type: "context.Context"},
+			{Name: "products", Type: "[]string"},
+			{Name: "isTest", Type: "bool"},      // NEW parameter inserted here
+			{Name: "hfWeek", Type: "string"},    // Was at index 2, now at index 3
+			{Name: "marketCode", Type: "string"}, // Was at index 3, now at index 4
+		},
+		NewReturns: []analyzer.Parameter{
+			{Type: "error"},
+		},
+		DefaultValues: map[string]string{
+			"isTest": "false",
+		},
+	}
+
+	edits, err := r.Refactor(filepath.Join(testDir, "main.go"), 40, spec)
+
+	// Then the function body should still use hfWeek and marketCode correctly
+	// NOT have them replaced with isTest
+	if err != nil {
+		t.Fatalf("Refactor failed: %v", err)
+	}
+
+	content := applyEdits(t, testDir, edits)
+
+	// Verify signature is correct
+	if !strings.Contains(content["main.go"], "func ResolveData(ctx context.Context, products []string, isTest bool, hfWeek string, marketCode string)") {
+		t.Errorf("signature not updated correctly:\n%s", content["main.go"])
+	}
+
+	// CRITICAL: Verify hfWeek is still used in body (not replaced with isTest)
+	if !strings.Contains(content["main.go"], "fmt.Println(hfWeek)") {
+		t.Errorf("hfWeek usage incorrectly renamed in body:\n%s", content["main.go"])
+	}
+
+	// CRITICAL: Verify marketCode is still used in body (not replaced with hfWeek)
+	if !strings.Contains(content["main.go"], "fmt.Println(marketCode)") {
+		t.Errorf("marketCode usage incorrectly renamed in body:\n%s", content["main.go"])
+	}
+
+	// Call site should have default value for new param
+	if !strings.Contains(content["main.go"], `ResolveData(context.Background(), []string{"a"}, false, "2024-W01", "US")`) {
+		t.Errorf("call site not updated correctly:\n%s", content["main.go"])
+	}
+}
+
 func TestRemoveParameter(t *testing.T) {
 	// Given a function with multiple parameters
 	testDir := setupTestDir(t, map[string]string{

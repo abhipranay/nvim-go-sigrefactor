@@ -473,11 +473,16 @@ func (r *Refactorer) createInterfaceMethodEdit(method *ast.Field, pkg *packages.
 func (r *Refactorer) createParamRenameEdits(fd *ast.FuncDecl, pkg *packages.Package, currentParams []paramInfo, newParams []analyzer.Parameter) []analyzer.TextEdit {
 	var edits []analyzer.TextEdit
 
-	// Build rename map
+	// Build param mapping first (old index -> new index) using name matching
+	paramMapping := r.buildParamMapping(currentParams, newParams)
+
+	// Build rename map using the correct mapping
 	renames := make(map[string]string)
-	for i, curr := range currentParams {
-		if i < len(newParams) && curr.Name != "" && newParams[i].Name != "" && curr.Name != newParams[i].Name {
-			renames[curr.Name] = newParams[i].Name
+	for oldIdx, newIdx := range paramMapping {
+		oldName := currentParams[oldIdx].Name
+		newName := newParams[newIdx].Name
+		if oldName != "" && newName != "" && oldName != newName {
+			renames[oldName] = newName
 		}
 	}
 
