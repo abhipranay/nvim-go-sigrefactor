@@ -317,6 +317,73 @@ type Range struct {
 
 **Important**: Edits are sorted by offset in descending order before application. This ensures earlier edits don't shift the positions of later edits.
 
+### 8. Edit Deduplication
+
+When `Tests: true` is set in `packages.Config`, Go loads source files in multiple packages:
+- Main package (`package foo`)
+- External test package (`package foo_test`)
+- Internal test package (test files with `package foo`)
+
+This can cause the same call site to be matched multiple times, generating duplicate edits at the same offset. Without deduplication, applying the same edit twice corrupts the file:
+
+```
+Original: ProcessOrder(ctx, data, code)
+After 1st edit: ProcessOrder(ctx, data, false, code)  ✓
+After 2nd edit: ProcessOrder(ctx, data, false, codecode)  ✗ CORRUPTED
+```
+
+**Solution**: Deduplicate edits by file path + offset range before applying:
+
+```go
+func deduplicateEdits(edits []TextEdit) []TextEdit {
+    seen := make(map[string]bool)
+    var result []TextEdit
+
+    for _, edit := range edits {
+        key := fmt.Sprintf("%d-%d", edit.Range.Start.Offset, edit.Range.End.Offset)
+        if !seen[key] {
+            seen[key] = true
+            result = append(result, edit)
+        }
+    }
+
+    return result
+}
+```
+
+### 9. Parameter Body Rename Mapping
+
+When renaming parameters inside the function body, we must use the **parameter mapping** (name-based), not position-based matching. This is critical when inserting new parameters in the middle:
+
+**Wrong approach (position-based):**
+```go
+// If inserting isTest at index 2:
+// Original: [ctx, products, hfWeek, marketCode]
+// New:      [ctx, products, isTest, hfWeek, marketCode]
+
+// Position-based matching incorrectly pairs:
+// currentParams[2] (hfWeek) with newParams[2] (isTest) → WRONG RENAME!
+```
+
+**Correct approach (name-based mapping):**
+```go
+func createParamRenameEdits(currentParams, newParams []Parameter) {
+    // Build mapping using name matching first
+    paramMapping := buildParamMapping(currentParams, newParams)
+
+    // Use mapping to determine renames
+    for oldIdx, newIdx := range paramMapping {
+        oldName := currentParams[oldIdx].Name
+        newName := newParams[newIdx].Name
+        if oldName != newName {
+            renames[oldName] = newName  // Only rename if names differ
+        }
+    }
+}
+```
+
+This ensures `hfWeek` maps to `hfWeek` (by name), not to `isTest` (by position).
+
 ## Lua Plugin Architecture
 
 ### Async CLI Communication
