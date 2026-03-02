@@ -294,8 +294,13 @@ function M.open(filename, offset)
     end
 
     state.original_signature = result.signature
-    state.params = vim.deepcopy(result.signature.params or {})
-    state.returns = vim.deepcopy(result.signature.returns or {})
+    -- Handle vim.NIL from JSON null values (vim.NIL is truthy so "or {}" doesn't work)
+    local params = result.signature.params
+    local returns = result.signature.returns
+    if params == vim.NIL then params = nil end
+    if returns == vim.NIL then returns = nil end
+    state.params = vim.deepcopy(params or {})
+    state.returns = vim.deepcopy(returns or {})
     state.selected_idx = 1
     state.mode = "params"
 
@@ -374,7 +379,8 @@ function M.apply_changes()
   end
 
   local function do_refactor(default_values)
-    spec.defaultValues = default_values or {}
+    -- Use vim.empty_dict() to ensure JSON encodes as {} not []
+    spec.defaultValues = default_values or vim.empty_dict()
 
     cli.refactor(state.filename, state.offset, spec, function(result, err)
       if err then
@@ -469,7 +475,7 @@ function M.apply_changes()
     end
     ask_next(1)
   else
-    do_refactor({})
+    do_refactor(vim.empty_dict())
   end
 end
 
